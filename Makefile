@@ -9,7 +9,7 @@ OBJECTS  = $(SOURCES:.S=.o)
 OPT = -Os
 
 all:
-	avr-gcc -c -Wall ${POT} -mmcu=atmega8 -o ${TARGET}.o ${TARGET}.S
+	avr-gcc -DF_CPU=4000000LL -c -Wall ${POT} -mmcu=atmega8 -o ${TARGET}.o ${TARGET}.S
 	avr-gcc -Wall -Os -mmcu=atmega8 -o ${TARGET} ${TARGET}.o
 	avr-objcopy -O ihex ${TARGET} ${TARGET}.hex
 	avr-size ${TARGET}
