@@ -5,27 +5,16 @@
 ; that can be found in the LICENSE file.
 
 ; ATmega8 @4MHz internal osc. (H:D9, L:23)
-; HD44780_wired.S "Hello world"
-; prins greeting with twi extension
-; under early development
-; atmega8
+; JHD162A HD44780 "Hello world"
+; via twi extension PCF8574AT
+; beta 
+; without repeated start yet
 
 #undef __SFR_OFFSET
 #define __SFR_OFFSET 0
 #include <avr/io.h>
 
-#define CTRD DDRB
-#define CTRP PORTB
-#define CTR_RS PB0
-#define CTR_RW PB1
-#define CTR_E  PB2
-#define DATD DDRC
-#define DATP PORTC
-#define DATI PINC
-#define DATA4 PC0
-#define DATA5 PC1
-#define DATA6 PC2
-#define DATA7 PC3
+; twi status
 #define START     0x08
 #define REP_START 0x10
 #define SLAW_ACK  0x18
@@ -33,6 +22,26 @@
 #define DATA_ACK  0x28
 #define DATA_NACK 0x30
 
+; pcf8574 <-> HD44780
+; P0 - rs
+; P1 - rw
+; P2 - e (cs)
+; P3 - backlight
+; P4 - DB4
+; P5 - DB5
+; P6 - DB6
+; P7 - DB7
+; pcf(twi)q data bits
+#define rs 0
+#define rw 1
+#define  e 2
+#define bl 3
+#define p4 4
+#define p5 5
+#define p6 6
+#define p7 7
+
+; registers
 accum = 0			; r0
 temp  = 16			; good worker (.set)
 char  = 17			; msg char
@@ -41,8 +50,9 @@ counter = 19                    ; delay counter reg
 code = 20                       ; blink code reg
 address = 21                    ; twi address reg
 data = 22                       ; twi data reg
+len = 23			; string length
 
-.data
+.data				; eeprom preferred
 
 .text
 
@@ -50,29 +60,24 @@ data = 22                       ; twi data reg
 .global TIMER0_OVF_vect		;
 
 main:				;
-        rcall led_init          ;
         rcall timer_init        ;
         rcall delay_20ms        ;
-	rcall ports_init	;
-	rcall lcd_init		;
-	rcall lcd_string	;
-        ;rcall led_on            ; j-tag (:
-        rcall led_port_init     ; B0 out,low
         rcall twi_init          ; 100kHz
         rcall twi_scan          ; downwards 127..0 (0 = not answered scan)
         cpi address, 0          ; there was no answer
-        brne main1              ; if not cleared
-        rcall error_blink       ; error blink
+        brne main1              ; scan success
+        rcall led_on            ; error
         main1:                  ;
         rcall pcf_init          ;
-        rcall pcf_led_on_off    ; light led connected to pcf8574
+        rcall lcd_init          ;
+        rcall lcd_string        ;
+        ;rcall led_on		; j-tag (:
 	loop:			;
 	rjmp loop 		;
 ret				;
 
-msg1: .asciz "Hello world"       ;
-msg2: .asciz "Hello world"       ;
-
+msg1: .asciz "Hello world"      ; temporarily in prog. space
+msg2: .asciz "Hi stranger"      ;
 ret				;
 
 lcd_string:			;
@@ -84,289 +89,272 @@ lcd_string:			;
 	mov char, accum		; copy word into char register
 	rcall lcd_char		; write one 4bit mode char
         inc zl                  ; next 16 bit world of msg
-	dec temp		; one less msg left
+	dec len			; one char less
 	brne ls1		; if not Z go next
 ret				; or exit
 
 strlen:				; count length of msg
-        ;ldi temp, 7             ; debugging
+        ;ldi len, 7             ; debugging
 	;ret			; debugging
 	push zh			; save msg pointer
 	push zl			; to stack
-	clr temp		; clear counter
+	clr len			; clear counter
 	sl1:			;
 	lpm			; read msg byte into r0
 	mov char, accum		; copy r0 into char
 	cpi char, 0		; end of string? (seems it always non zero)
 	breq sl2		; '\0' string terminator
-	inc temp		; increment length counter
+	inc len		; increment length counter
 	inc zl			; increment Z
 	rjmp sl1		; and continue read flash
 	sl2:			;
 	pop zl			; restore flash pointer
 	pop zh			; from stack
-	;ldi temp, 7		; debugging
+	;ldi len, 7		; debugging
 ret				;
 
 lcd_char:			; write one character
-        rcall rs_out_high       ;
-        rcall rw_out_low        ;
-        ; low nibble, w/o mask, bit by bit
-        rcall all_data_out      ; 0000
+        ; low nibble		;
+        rcall instr_r           ; \ ???
+        rcall wait_bf           ;  | -- wait busy flag low state
+        rcall data_w            ; /
+	andi data, 0x0F		; clear data bits
 	sbrc char, 7		;
-	rcall d7_out_high	;
+	rcall d7_high		;
         sbrc char, 6            ;
-        rcall d6_out_high       ;
+        rcall d6_high       	; need protect 3210 control bits !!!
         sbrc char, 5            ;
-        rcall d5_out_high       ;
+        rcall d5_high       	;
         sbrc char, 4            ;
-        rcall d4_out_high       ;
-        rcall e_pulse           ; HIGH TETRADE
-	; high nibble
-        rcall all_data_out      ; 0000
-        sbrc char, 3            ;
-        rcall d7_out_high       ;
-        sbrc char, 2            ;
-        rcall d6_out_high       ;
-        sbrc char, 1            ;
-        rcall d5_out_high       ;
-        sbrc char, 0            ;
-        rcall d4_out_high       ;
-        rcall e_pulse 		; LOW TETRADE
-        rcall all_data_in 	;
+        rcall d4_high       	;
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ;
+	; high nibble		;
+        andi data, 0x0F         ; clear data bits
+	swap char		;
+        sbrc char, 7            ;
+        rcall d7_high       	;
+        sbrc char, 6            ;
+        rcall d6_high       	;
+        sbrc char, 5            ;
+        rcall d5_high       	;
+        sbrc char, 4            ;
+        rcall d4_high       	;
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse 	;
+ret				;
+
+lcd_init:			;
+        rcall delay_20ms        ; >= 40 ms
+        rcall delay_20ms        ;
+				; 8-bit mode w/o busy flag check
+        rcall bl_low            ; backlight bit
+	rcall d4_high		;
+	rcall d5_high		; 0011 - init1
+	rcall d6_low		;
+	rcall d7_low		;
+	rcall instr_w		;
+	rcall twi_onebyte_w	;
+	rcall twi_e_pulse	; 1
+				;
+        rcall delay_1ms         ;
+        rcall delay_1ms         ;
+        rcall delay_1ms         ;
+        rcall delay_1ms         ;
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 2
+				;
+        rcall delay_100us       ;
+        rcall twi_onebyte_w     ;
+	rcall twi_e_pulse	; 3
+				;
+        rcall delay_100us       ;
+        rcall d4_low            ; 0010 - pre function set
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 4
+				;
+        rcall delay_100us       ; flag chech & 4-bit mode next
+				;
+        rcall d5_high           ; 0010 - function set
+        rcall twi_onebyte_w     ;
+	rcall twi_e_pulse	; 5
+        rcall d7_high           ;
+	rcall d5_low		; 1000 - 2 lines, 5x8 font
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 6
+				;
+        rcall instr_r	        ; bf
         rcall wait_bf           ;
+        rcall instr_w	        ;
+	rcall d7_low		; 0000 - display
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 7
+	rcall d7_high		; 1000 - off
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 8
+				;
+        rcall instr_r	        ;
+        rcall wait_bf           ;
+        rcall instr_w	        ;
+	rcall d7_low		; 0000 - display
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 9
+        rcall d4_high           ; 0001 - clear
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 10
+				;
+        rcall instr_r	        ;
+        rcall wait_bf           ;
+        rcall instr_w	        ;
+	rcall d4_low		; 0000 - entry
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 11
+        rcall d6_high           ;
+        rcall d5_high           ; 0110 - mode
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 12
+				;
+        rcall instr_r	        ;
+        rcall wait_bf           ;
+        rcall instr_w	        ;
+	rcall d6_low		;
+	rcall d5_low		; 0000 - display
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 13
+        rcall d7_high           ;
+        rcall d6_high           ; 1100 - on
+        rcall d5_high           ; 1110 - w/ cursor
+        rcall d4_high           ; 1111 - w/ blinking
+        rcall bl_high	        ;
+        rcall twi_onebyte_w     ;
+        rcall twi_e_pulse       ; 14
+				;
+        rcall instr_r	        ;
+        rcall wait_bf           ;
+        rcall delay_20ms        ; voila
 ret				;
 
-wait_bf:                        ; wait until busy flag cleared
-;        rcall delay_1ms	; debugging
-	rcall rs_out_low	;
-        rcall rw_out_high       ;
-	rcall all_data_in	;
-        rcall e_out_high	;
-        wb1:                    ;
-        sbic DATI, DATA7        ; wait BF cleared
-        rjmp wb1                ;
-	rcall e_out_low		;
+wait_bf:                ; wait until busy flag cleared
+	ret		; twi wins all delay cups (:
+;        rcall delay_1ms ; debugging
+;       rcall rs_low    ;
+;        rcall rw_high  ;
+;        rcall e_high   ;
+;        wb1:           ;
+;        sbic data, p   ; till bf cleared
+;        rjmp wb1       ;
+;       rcall e_low     ;
+;        nop            ;
+;        nop            ;
+;        nop            ;
+;       nop             ;
+;       rcall e_pulse   ;
+ret                     ;
+
+twi_e_pulse:                    ;
+        rcall e_high            ;
+	rcall twi_onebyte_w	;
         nop                     ;
         nop                     ;
+        nop                     ; about us (as microseconds) (:
         nop                     ;
-	nop			;
-	rcall e_pulse           ;
+        rcall e_low             ;
+	rcall twi_onebyte_w	;
 ret                             ;
 
-e_pulse:                        ;
-        rcall e_out_high        ;
-        nop			;
-        nop			;
-        nop			; about us
-        nop			;
-        rcall e_out_low         ;
+twi_backlight_on:		;
+	rcall bl_high		;
+	rcall twi_onebyte_w	;
+ret				;
+
+twi_backlight_off:		;
+	rcall bl_low		;
+	rcall twi_onebyte_w	;
+ret				;
+
+instr_w:                    ; instrustion write
+        rcall rs_low              ;
+        rcall rw_low              ;
 ret                             ;
 
-lcd_init:				;
-        rcall delay_20ms                ; >= 40 ms
-        rcall delay_20ms                ;
-	rcall rs_out_low		;
-	rcall rw_out_low		;
-			; 8-bit mode
-        rcall all_data_out              ; def. low
-	rcall d4_out_high		;
-	rcall d5_out_high		; 0011 - init1
-	rcall e_pulse			; 1
-        rcall delay_1ms                 ;
-        rcall delay_1ms                 ;
-        rcall delay_1ms                 ;
-        rcall delay_1ms                 ;
-        rcall e_pulse                   ; 2
-        rcall delay_100us                ;
-	rcall e_pulse			; 3
-        rcall delay_100us                ;
-        rcall d4_out_low                ; 0010 - pre function
-        rcall e_pulse                   ; 4
-        rcall delay_100us                ;
-			; 4-bit mode
-        rcall all_data_out              ;
-        rcall d5_out_high               ; 0010 - function set, 4 bit mode
-	rcall e_pulse			; 5
-	rcall all_data_out		;
-        rcall d7_out_high               ; 1000 - function set cont. 2 lines, 5x8 font, - -
-        rcall e_pulse                   ; 6
-        rcall all_data_in               ;
-        rcall rw_out_high               ;
-        rcall wait_bf                   ;
-        rcall rw_out_low               ;
-        rcall all_data_out              ; 0000 - display
-        rcall e_pulse                   ; 7
-        rcall d7_out_high               ; 1000 - off
-        rcall e_pulse                   ; 8
-        rcall all_data_in               ;
-        rcall rw_out_high               ;
-        rcall wait_bf                   ;
-        rcall rw_out_low               ;
-        rcall all_data_out              ; 0000 - display
-        rcall e_pulse                   ; 9
-        rcall d4_out_high               ; 0001 - clear
-        rcall e_pulse                   ; 10
-        rcall all_data_in               ;
-        rcall rw_out_high               ;
-        rcall wait_bf                   ;
-        rcall rw_out_low               ;
-        rcall all_data_out              ; 0000 - entry
-        rcall e_pulse                   ; 11
-        rcall d6_out_high               ; 0100 - mode
-        rcall d5_out_high               ; 0110
-        rcall e_pulse                   ; 12
-        rcall all_data_in               ;
-        rcall rw_out_high               ;
-        rcall wait_bf                   ;
-        rcall rw_out_low               ;
-        rcall all_data_out              ; 0000 - display
-        rcall e_pulse                   ; 13
-        rcall d7_out_high               ; 1000
-        rcall d6_out_high               ; 1100 - on
-        rcall d5_out_high               ; 1110 - w/ cursor
-        rcall d4_out_high               ; 1111 - w/ blinking
-        rcall e_pulse                   ; 14
-        rcall all_data_in               ;
-        rcall rw_out_high               ;
-        rcall wait_bf                   ;
-        rcall rw_out_low               ;
-        rcall delay_20ms                ; voila
-ret					;
-
-ports_init:			;
-	rcall rs_out_low	;
-	rcall rw_out_low	;
-	rcall e_out_low		;
-	rcall d4_out_low	;
-	rcall d5_out_low	;
-	rcall d6_out_low	;
-	rcall d7_out_low	;
-ret				;
-
-all_data_in:			;
-        rcall d4_in_low         ;
-        rcall d5_in_low         ;
-        rcall d6_in_low         ;
-	rcall d7_in_low		;
-ret				;
-
-all_data_out:                   ;
-        rcall d4_out_low        ;
-        rcall d5_out_low        ;
-        rcall d6_out_low        ;
-        rcall d7_out_low        ;
-ret		                ;
-
-d4_in_low:                      ;
-        cbi DATD, DATA4         ;
-        cbi DATP, DATA4         ;
-ret		                ;
-
-d4_in_high:                     ;
-        cbi DATD, DATA4         ;
-        sbi DATP, DATA4         ;
+instr_r:                     ; busy flag or a-counter read
+        rcall rs_low              ;
+        rcall rw_high             ;
 ret                             ;
 
-d4_out_low:                     ;
-        sbi DATD, DATA4         ;
-        cbi DATP, DATA4         ;
-ret	                        ;
-
-d4_out_high:                    ;
-        sbi DATD, DATA4         ;
-        sbi DATP, DATA4         ;
-ret 	                        ;
-
-d5_in_low:                      ;
-        cbi DATD, DATA5         ;
-        cbi DATP, DATA5         ;
-ret 	                        ;
-
-d5_in_high:                     ;
-        cbi DATD, DATA5         ;
-        sbi DATP, DATA5         ;
+data_w:                     ; data write
+        rcall rs_high             ;
+        rcall rw_low              ;
 ret                             ;
 
-d5_out_low:                     ;
-        sbi DATD, DATA5         ;
-        cbi DATP, DATA5         ;
-ret 	                        ;
-
-d5_out_high:                    ;
-        sbi DATD, DATA5         ;
-        sbi DATP, DATA5         ;
-ret 	                        ;
-
-d6_in_low:                      ;
-        cbi DATD, DATA6         ;
-        cbi DATP, DATA6         ;
-ret	                        ;
-
-d6_in_high:                     ;
-        cbi DATD, DATA6         ;
-        sbi DATP, DATA6         ;
+data_r:                      ; data read
+        rcall rs_high             ;
+        rcall rw_high             ;
 ret                             ;
 
-d6_out_low:                     ;
-        sbi DATD, DATA6         ;
-        cbi DATP, DATA6         ;
-ret 	                        ;
+d4_low:                      ;
+        cbr data, 1<<p4         ;
+ret	                     ;
 
-d6_out_high:                    ;
-        sbi DATD, DATA6         ;
-        sbi DATP, DATA6         ;
-ret 	                        ;
+d4_high:                     ;
+        sbr data, 1<<p4         ;
+ret                          ;
 
-d7_in_low:                      ;
-        cbi DATD, DATA7         ;
-    	cbi DATP, DATA7         ;
-ret		                ;
+d5_low:                      ;
+        cbr data, 1<<p5         ;
+ret                          ;
 
-d7_in_high:                     ;
-        cbi DATD, DATA7         ;
-        sbi DATP, DATA7         ;
-ret                             ;
+d5_high:                     ;
+        sbr data, 1<<p5         ;
+ret                          ;
 
-d7_out_low:                     ;
-        sbi DATD, DATA7         ;
-        cbi DATP, DATA7         ;
-ret	                        ;
+d6_low:                      ;
+        cbr data, 1<<p6         ;
+ret                          ;
 
-d7_out_high:                    ;
-        sbi DATD, DATA7         ;
-        sbi DATP, DATA7         ;
-ret 	                        ;
+d6_high:                     ;
+        sbr data, 1<<p6         ;
+ret                          ;
 
-rs_out_low:			;
-        sbi CTRD, CTR_RS        ;
-        cbi CTRP, CTR_RS        ;
-ret				;
+d7_low:                      ;
+        cbr data, 1<<p7         ;
+ret                          ;
 
-rs_out_high:	                ;
-        sbi CTRD, CTR_RS        ;
-        sbi CTRP, CTR_RS        ;
-ret				;
+d7_high:                     ;
+        sbr data, 1<<p7         ;
+ret                          ;
 
-rw_out_low:                     ;
-        sbi CTRD, CTR_RW        ;
-        cbi CTRP, CTR_RW        ;
-ret				;
+rs_low:		             ;
+        cbr data, 1<<rs         ;
+ret			     ;
 
-rw_out_high:                    ;
-        sbi CTRD, CTR_RW        ;
-        sbi CTRP, CTR_RW        ;
-ret				;
+rs_high:	             ;
+        sbr data, 1<<rs         ;
+ret			     ;
 
-e_out_low:                      ;
-        sbi CTRD, CTR_E         ;
-        cbi CTRP, CTR_E         ;
-ret				;
+rw_low:                      ;
+        cbr data, 1<<rw         ;
+ret			     ;
 
-e_out_high:                     ;
-        sbi CTRD, CTR_E         ;
-        sbi CTRP, CTR_E         ;
-ret				;
+rw_high:                     ;
+        sbr data, 1<<rw         ;
+ret			     ;
+
+e_low:                       ;
+        cbr data, 1<<e          ;
+ret			     ;
+
+e_high:                      ;
+        sbr data, 1<<e          ;
+ret			     ;
+
+bl_high:		;
+	sbr data, 1<<bl	;
+ret			;
+
+bl_low:		        ;
+        cbr data, 1<<bl    ;
+ret                     ;
 
 delay_20ms:                     ;
         ldi temp, 20            ;
@@ -390,6 +378,16 @@ delay_1ms:                      ;
         brne d1                 ;
 ret 		                ;
 
+timer_init:                             ;
+        ldi temp, (1<<CS00)             ; prescaler 1, 0.25 us
+        out TCCR0, temp                 ;
+        ldi temp, 155                   ; 25 us
+        out TCNT0, temp                 ;
+        ldi temp, (1<<TOIE0)            ;
+        out TIMSK, temp                 ;
+        sei                             ; go
+ret                                     ;
+
 TIMER0_OVF_vect:                ;
 	cli			;
         push temp               ; save
@@ -404,16 +402,6 @@ TIMER0_OVF_vect:                ;
 	sei			;
 reti 		                ;
 
-timer_init:				;
-        ldi temp, (1<<CS00)		; prescaler 1, 0.25 us
-	out TCCR0, temp			;
-	ldi temp, 155			; 25 us
-	out TCNT0, temp			;
-	ldi temp, (1<<TOIE0)    	;
-	out TIMSK, temp         	;
-	sei				; go
-ret					;
-
 led_init:			;
         sbi DDRD, PD7           ; D7 output
         cbi PORTD, PD7          ; D7 low
@@ -424,29 +412,9 @@ led_on:				;
         sbi PORTD, PD7          ; D7 high
 ret				;
 
-
-pcf_led_on_off:			;
-	pcfled:			;
-	ldi data, 0xFF		; 7:0 high
-	rcall twi_start		;
-	rcall twi_sla_w		;
-	rcall twi_data_w	;
-        rcall twi_stop          ;
-        ldi counter, 5          ; delay
-        rcall delay             ;
-        rcall twi_start         ;
-        rcall twi_sla_w         ;
-        ldi data, 0x00          ; 7:0 low
-        rcall twi_data_w        ;
-        rcall twi_stop          ;
-        ldi counter, 5          ; delay
-        rcall delay             ;
-	rjmp pcfled		;
-	ret			;
-
 pcf_init:			;
 	nop			;
-	ret			;
+ret				;
 
 twi_scan:			;
 	ldi address, 127	; will step backward
@@ -464,6 +432,13 @@ twi_scan:			;
 	rcall twi_stop		;
 	ret			;
 
+twi_onebyte_w: 	                ;
+        rcall twi_start         ;
+        rcall twi_sla_w         ;
+        rcall twi_data_w        ;
+        rcall twi_stop          ;
+ret		                ;
+
 twi_data_w:					;
 	mov temp, data				;
 	out TWDR, temp				; data
@@ -472,12 +447,12 @@ twi_data_w:					;
 	tdw1:					;
 	in temp, TWCR				;
 	sbrs temp, TWINT			; sent?
-	rjmp tdw1				; not yet, repeat
-	in temp, TWSR				; ok, read status
+	rjmp tdw1				; no? repeat
+	in temp, TWSR				; else, read status
 	andi temp, 0xF8				;
-	cpi temp, DATA_ACK			;
+	cpi temp, DATA_ACK			; ack?
 	breq tdw2				; ok
-        rcall error_blink                       ; error (blinking loop)
+        rcall led_on                       	; nack
 	tdw2:					;
 	ret					;
 
@@ -495,7 +470,7 @@ twi_sla_w:					;
         andi temp, 0xF8                         ;
         cpi temp, SLAW_ACK                      ;
 	breq slaw2				; acked (stay temp untouched)
-	;rcall error_blink			; uncomment if used w/o autodetect
+	;rcall led_on			; uncomment if used w/o autodetect
 	ser temp				; else (temp=0xFF)
 	slaw2:					;
 	ret					;
@@ -513,7 +488,7 @@ twi_start:						;
 	breq start2					;
         cpi temp, REP_START                             ;
         breq start2                                     ;
-	rcall error_blink				; error (blinking loop)
+	rcall led_on				; error
 	start2:						;
 	ret						; acked
 
@@ -522,55 +497,13 @@ twi_stop:						;
         out TWCR, temp                                  ;
 	ret						;
 
-error_blink:			;
-        eb:                     ;
-        sbi PORTB, 0            ; B0 high
-        ldi counter, 1          ; delay on
-        rcall delay             ;
-        cbi PORTB, 0            ; B0 low
-        ldi counter, 3         ; delay off
-        rcall delay             ;
-        rjmp eb                 ;
-        ret                     ;
-
-delay:                          ; counter itself decrements by t0 isr
-wait:                           ;
-        cpi counter, 0          ; just wait 0
-        brne wait               ;
-        ret                     ; voila
-
-forever:			; debugging before error blink
-	rjmp forever		;
-
-led_port_init:			;
-	sbi DDRB, 0		; B0 output
-	cbi PORTB, 0		; B0 low
-	ret			;
-
 twi_init:			; 100 kHz @4MHz clock
-	ldi temp, 0b00001100	; 4000000 / ( 16 + 2*TWBR * 4^TWPS )
+	ldi temp, 0b00001100	; 4000000 / ( 16 + 2*twbr * 4^twps )
 	out TWBR, temp		; 12
         in temp, TWSR	        ;
 	ori temp, 0b00000011	; 64
 	out TWSR, temp		;
 	ret			;
-
-;timer_init:			; TIMER0 (65 ms @4MHz)
-;        ldi temp, (1<<CS00)     ;
-;        ori temp, (1<<CS02)     ;
-;        out TCCR0, temp         ;
-;        ldi temp, (1<<TOIE0)    ;
-;        out TIMSK, temp         ;
-;        sei                     ;
-;	ret			;
-
-;TIMER0_OVF_vect:		; counter--
-;	push temp		;
-;	in temp, SREG		; z in main loop
-;	subi counter, 1		;
-;	out SREG, temp		;
-;	pop temp		;
-;	reti			;
 
 .global __vector_default        ; Note [10] nongnu.org assembly
 __vector_default:		;
