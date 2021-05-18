@@ -73,13 +73,13 @@ main:				;
 	;rcall lcd_home		;
 	;rcall lcd_cur		;
         rcall lcd_print         ;
-        rcall led_on		; j-tag (:
+        ;rcall led_on		; j-tag (:
 	loop:			;
 	rjmp loop 		;
 ret				;
 
 msg1: .asciz "Hi, stranger,"    ; temporarily in prog. space
-msg2: .asciz "me ozforeser."    ;
+msg2: .asciz "me ozforester"    ;
 ret				;
 
 lcd_cur:			; cursor position
