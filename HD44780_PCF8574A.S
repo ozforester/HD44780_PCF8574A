@@ -1,5 +1,3 @@
-; somewhere in strlen hides an error
-
 ; Copyright (c) 2021 ozforester. All rights reserved.
 ; Use of this source code is goverened by a MIT license
 ; that can be found in the LICENSE file.
@@ -46,7 +44,7 @@ temp  = 16			; good worker (.set)
 char  = 17			; msg char
 tcntr = 18			; time counter
 counter = 19                    ; delay counter reg
-code = 20                       ; blink code reg
+ code = 20                       ; blink code reg
 address = 21                    ; twi address reg
 data = 22                       ; twi data reg
 len = 23			; string length
