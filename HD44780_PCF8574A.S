@@ -18,16 +18,6 @@
 #define DATA_ACK  0x28
 #define DATA_NACK 0x30
 
-; pcf8574 <-> HD44780
-; P0 - rs
-; P1 - rw
-; P2 - e (cs)
-; P3 - backlight
-; P4 - DB4
-; P5 - DB5
-; P6 - DB6
-; P7 - DB7
-
 ; pcf(twi)q data bits
 #define rs 0
 #define rw 1
@@ -44,14 +34,19 @@ temp  = 16			; good worker (.set)
 char  = 17			; msg char
 tcntr = 18			; time counter
 counter = 19                    ; delay counter reg
- code = 20                       ; blink code reg
+code = 20                       ; blink code reg
 address = 21                    ; twi address reg
 data = 22                       ; twi data reg
 len = 23			; string length
 
-.data				; eeprom preferred
+.section .eeprom
 
-.text
+msg2: .asciz "me ozforester"    ; eeprom space :0E000000 6D65206F7A666F72657374657200 AD
+				;              S140000DD  m e _ o z f o r e s t e r\0 CS
+
+.section .text
+
+msg1: .asciz "Hi, stranger,"    ; prog space
 
 .global main			;
 .global TIMER0_OVF_vect		;
@@ -74,10 +69,6 @@ main:				;
         ;rcall led_on		; j-tag (:
 	loop:			;
 	rjmp loop 		;
-ret				;
-
-msg1: .asciz "Hi, stranger,"    ; temporarily in prog. space
-msg2: .asciz "me ozforester"    ;
 ret				;
 
 lcd_cur:			; cursor position
@@ -112,42 +103,61 @@ lcd_clear:                      ;
         rcall twi_sla_w         ;
         rcall wait_bf           ;
         andi data, 0x0F         ; clear data bits
-        rcall instr_w        ; set
+        rcall instr_w           ; set
         rcall twi_e_pulse       ; take
         rcall d4_high           ; 0001 - clear
-        ;rcall instr_w        ;
+        ;rcall instr_w          ;
         rcall twi_e_pulse       ;
 	rcall twi_stop		;
 ret                             ;
 
 
 lcd_print:			;
-        ldi zh, hi8(msg1)       ; z *-> msg1
-        ldi zl, lo8(msg1)       ;
-	rcall lcd_msg		;
+	rcall lcd_msg1		;
 	rcall lcd_cur		;
-        ldi zh, hi8(msg2)       ; z *-> msg2
-        ldi zl, lo8(msg2)       ;
-        rcall lcd_msg           ;
+        rcall lcd_msg2          ;
 ret				;
 
-lcd_msg:			;
+lcd_msg1:			;
 	rcall twi_start		;
 	rcall twi_sla_w		;
-        ;ldi zh, hi8(msg1) 	; z *-> msg
-        ;ldi zl,	lo8(msg1)	;
+        ldi zh, hi8(msg1) 	; z *-> msg
+        ldi zl, lo8(msg1)	;
 	rcall strlen		; length in temp register
 	ls1:			;
-	lpm			; read msg word into r0
+	lpm			; read msg byte into r0 (looks like 1 byte read)
 	mov char, accum		; copy word into char register
 	rcall lcd_char		; write one 4bit mode char
         inc zl                  ; next 16 bit world of msg
 	dec len			; one char less
 	brne ls1		; if not Z go next
 	rcall twi_stop		;
-ret				; or exit
+ret				;
 
-strlen:				; count length of msg
+lcd_msg2:     			;
+        rcall twi_start         ;
+        rcall twi_sla_w         ;
+        clr len                 ;
+        out EEARH, len          ; address 0
+        out EEARL, len          ;
+	lm2:			;
+        sbic EECR, EERE         ; wait EERE clear
+	rjmp lm2		;
+        sbi EECR, EERE		; set read enable
+	nop			;
+        in char, EEDR           ; read eeprom
+	cpi char, 0		;
+	breq lm3		;
+	rcall lcd_char		;
+	inc len 		; inc address
+	out EEARL, len		;
+	;rcall delay_20ms	;
+	rjmp lm2		;
+	lm3:			;
+        rcall twi_stop          ;
+ret                             ;
+
+strlen:			; count length of msg
         ;ldi len, 7             ; debugging
 	;ret			; debugging
 	push zh			; save msg pointer
