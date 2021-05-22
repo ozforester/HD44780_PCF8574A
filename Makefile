@@ -11,12 +11,13 @@ OPT = -Os
 all:
 	avr-gcc -DF_CPU=4000000LL -c -Wall ${POT} -mmcu=atmega8 -o ${TARGET}.o ${TARGET}.S
 	avr-gcc -Wall -Os -mmcu=atmega8 -o ${TARGET} ${TARGET}.o
-	avr-objcopy -O ihex ${TARGET} ${TARGET}.hex
-	avr-size ${TARGET}
+	avr-objcopy -R .eeprom -O ihex ${TARGET} ${TARGET}.hex
+	avr-objcopy -j .eeprom --set-section-flags=.eeprom="alloc,load" --change-section-lma .eeprom=0 -O ihex ${TARGET} ${TARGET}.eep
 	avr-size ${TARGET}.hex
+	avr-size ${TARGET}.eep
 
 flash:
-	avrdude -c usbasp -p m8 -B 3 -U flash:w:${TARGET}.hex
+	avrdude -c usbasp -p m8 -B 3 -U flash:w:${TARGET}.hex -U eeprom:w:${TARGET}.eep
 
 clean:
-	rm -f $(OBJECTS) $(TARGET) $(TARGET).hex $(TARGET).o
+	rm -f $(OBJECTS) $(TARGET) $(TARGET).hex $(TARGET).eep $(TARGET).o
