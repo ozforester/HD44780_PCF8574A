@@ -3,8 +3,15 @@
 ; that can be found in the LICENSE file.
 
 ; ATmega8 @4MHz internal osc. (H:D9, L:23)
-; JHD162A HD44780 "Hello world"
+; JHD162A HD44780
 ; via twi extension PCF8574AT
+
+; not working good lcd found
+; there is a bug
+; swap busy-flag and delay solves problem
+; so there is a bug in wrong ready/busy recognition
+
+; нужно добавить регистр флаг для понимания новое соединение начинать или в старое вписываться..
 
 #undef __SFR_OFFSET
 #define __SFR_OFFSET 0
@@ -15,8 +22,12 @@
 #define REP_START 0x10
 #define SLAW_ACK  0x18
 #define SLAW_NACK 0x20
-#define DATA_ACK  0x28
-#define DATA_NACK 0x30
+#define DATAW_ACK  0x28
+#define DATAW_NACK 0x30
+#define SLAR_ACK  0x40
+#define SLAR_NACK  0x48
+#define DATAR_ACK  0x50
+#define DATAR_NACK 0x58
 
 ; pcf(twi)q data bits
 #define rs 0
@@ -41,12 +52,11 @@ len = 23			; string length
 
 .section .eeprom
 
+msg1: .asciz "Hi, stranger,"    ;
 msg2: .asciz "me ozforester"    ; eeprom space :0E000000 6D65206F7A666F72657374657200 AD
-				;              S140000DD  m e _ o z f o r e s t e r\0 CS
+				; ihex         S140000DD m e _ o z f o r e s t e r \0 CS
 
 .section .text
-
-msg1: .asciz "Hi, stranger,"    ; prog space
 
 .global main			;
 .global TIMER0_OVF_vect		;
@@ -54,136 +64,127 @@ msg1: .asciz "Hi, stranger,"    ; prog space
 main:				;
         rcall timer_init        ;
         rcall delay_20ms        ;
+        rcall delay_20ms        ;
+        rcall delay_20ms        ;
         rcall twi_init          ; 100kHz
+        rcall delay_20ms        ;
+        rcall delay_20ms        ;
         rcall twi_scan          ; downwards 127..0
         cpi address, 0          ; 0 when no answer
         brne main1              ; scan success
-        rcall led_on            ; error
+        rcall error             ; error
         main1:                  ;
-        rcall pcf_init          ;
+        rcall delay_20ms        ;
         rcall lcd_init          ;
-	;rcall lcd_clear	;
-	;rcall lcd_home		;
-	;rcall lcd_cur		;
-        rcall lcd_print         ;
-        ;rcall led_on		; j-tag (:
+        ;rcall lcd_print         ;
+	;rcall error		; special j-tag led (:
 	loop:			;
 	rjmp loop 		;
 ret				;
 
-lcd_cur:			; cursor position
+; -------------- L C D   H D 4 4 7 8 0 ------------
+
+lcd_cur:			; temp 40 cursor position only
         rcall twi_start         ;
         rcall twi_sla_w         ;
-        rcall wait_bf           ;
+        rcall lcd_wait_bf       ;
         andi data, 0x0F         ; clear data bits
         rcall d7_high           ; 1xxx - set dram
         rcall d5_high           ; x100 - address 6:4
         rcall instr_w           ;
-        rcall twi_e_pulse       ; take
+        rcall lcd_e_pulse       ; take
         ;rcall instr_w          ; 0000 - address 3:0
-        rcall twi_e_pulse       ;
+	nop			;
+        rcall lcd_e_pulse       ;
         rcall twi_stop          ;
 ret				;
 
 lcd_home:			;
         rcall twi_start         ;
         rcall twi_sla_w         ;
-        rcall wait_bf           ;
+        rcall lcd_wait_bf       ;
         andi data, 0x0F         ; clear data bits
         rcall instr_w           ; 0000 - display
-        rcall twi_e_pulse       ; take
+        rcall lcd_e_pulse       ; take
         rcall d5_high           ; 001* - home
         ;rcall instr_w          ;
-        rcall twi_e_pulse       ;
+        rcall lcd_e_pulse       ;
         rcall twi_stop          ;
 ret				;
 
 lcd_clear:                      ;
         rcall twi_start         ;
         rcall twi_sla_w         ;
-        rcall wait_bf           ;
+        rcall lcd_wait_bf       ;
         andi data, 0x0F         ; clear data bits
         rcall instr_w           ; set
-        rcall twi_e_pulse       ; take
+        rcall lcd_e_pulse       ; take
         rcall d4_high           ; 0001 - clear
         ;rcall instr_w          ;
-        rcall twi_e_pulse       ;
+        rcall lcd_e_pulse       ;
 	rcall twi_stop		;
 ret                             ;
 
 
 lcd_print:			;
-	rcall lcd_msg1		;
+        ldi char, msg1          ;
+	rcall lcd_msg		;
 	rcall lcd_cur		;
-        rcall lcd_msg2          ;
+	ldi char, msg2		;
+        rcall lcd_msg           ;
 ret				;
 
-lcd_msg1:			;
-	rcall twi_start		;
-	rcall twi_sla_w		;
-        ldi zh, hi8(msg1) 	; z *-> msg
-        ldi zl, lo8(msg1)	;
-	rcall strlen		; length in temp register
-	ls1:			;
-	lpm			; read msg byte into r0 (looks like 1 byte read)
-	mov char, accum		; copy word into char register
-	rcall lcd_char		; write one 4bit mode char
-        inc zl                  ; next 16 bit world of msg
-	dec len			; one char less
-	brne ls1		; if not Z go next
-	rcall twi_stop		;
-ret				;
-
-lcd_msg2:     			;
+lcd_msg:     			;
         rcall twi_start         ;
         rcall twi_sla_w         ;
-        clr len                 ;
-        out EEARH, len          ; address 0
-        out EEARL, len          ;
-	lm2:			;
+        clr temp                ;
+        out EEARH, temp         ;
+        out EEARL, char         ; eeprom address
+	mov len, char		;
+	lm1:			;
         sbic EECR, EERE         ; wait EERE clear
-	rjmp lm2		;
+	rjmp lm1		;
         sbi EECR, EERE		; set read enable
 	nop			;
         in char, EEDR           ; read eeprom
-	cpi char, 0		;
-	breq lm3		;
+	cpi char, 0		; till \0
+	breq lm2		;
 	rcall lcd_char		;
 	inc len 		; inc address
-	out EEARL, len		;
-	;rcall delay_20ms	;
-	rjmp lm2		;
-	lm3:			;
+	out EEARL, len		; next eeprom symbol
+	rjmp lm1		;
+	lm2:			;
         rcall twi_stop          ;
 ret                             ;
 
-strlen:			; count length of msg
-        ;ldi len, 7             ; debugging
-	;ret			; debugging
-	push zh			; save msg pointer
-	push zl			; to stack
-	clr len			; clear counter
-	sl1:			;
-	lpm			; read msg byte into r0
-	mov char, accum		; copy r0 into char
-	cpi char, 0		; end of string? (seems it always non zero)
-	breq sl2		; '\0' string terminator
-	inc len			; increment length counter
-	inc zl			; increment Z
-	rjmp sl1		; and continue read flash
-	sl2:			;
-	pop zl			; restore flash pointer
-	pop zh			; from stack
-	;ldi len, 7		; debugging
-ret				;
+;lcd_strlen:			; count length of msg
+;        ;ldi len, 7             ; debugging
+;	;ret			; debugging
+;	push zh			; save msg pointer
+;	push zl			; to stack
+;	clr len			; clear counter
+;	sl1:			;
+;	lpm			; read msg byte into r0
+;	mov char, accum		; copy r0 into char
+;	cpi char, 0		; end of string? (seems it always non zero)
+;	breq sl2		; '\0' string terminator
+;	inc len			; increment length counter
+;	inc zl			; increment Z
+;	rjmp sl1		; and continue read flash
+;	sl2:			;
+;	pop zl			; restore flash pointer
+;	pop zh			; from stack
+;	;ldi len, 7		; debugging
+;ret				;
 
-lcd_char:			; write one character
-        ; low nibble		;
-        rcall wait_bf           ; busy flag
+lcd_char:			; send one char
+        ; high nibble		;
+	rcall data_r
+        rcall lcd_wait_bf       ; check busy flag
         rcall data_w            ;
 	andi data, 0x0F		; clear data bits
-	sbrc char, 7		;
-	rcall d7_high		;
+	sbrc char, 7		; xxxx----
+	rcall d7_high		; High
         sbrc char, 6            ;
         rcall d6_high       	;
         sbrc char, 5            ;
@@ -191,20 +192,19 @@ lcd_char:			; write one character
         sbrc char, 4            ;
         rcall d4_high       	;
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ;
-	; high nibble		;
-        andi data, 0x0F         ; clear data bits
-	swap char		;
-        sbrc char, 7            ;
-        rcall d7_high       	;
-        sbrc char, 6            ;
+        rcall lcd_e_pulse       ;
+	; low nibble		;
+        andi data, 0x0F         ; clear data bits again
+        sbrc char, 3            ; ----xxxx
+        rcall d7_high       	;     Low
+        sbrc char, 2            ;
         rcall d6_high       	;
-        sbrc char, 5            ;
+        sbrc char, 1            ;
         rcall d5_high       	;
-        sbrc char, 4            ;
+        sbrc char, 0            ;
         rcall d4_high       	;
 	rcall twi_data_w	;
-        rcall twi_e_pulse 	;
+        rcall lcd_e_pulse 	;
 ret				;
 
 lcd_init:			; optimize when out of pmem
@@ -212,121 +212,180 @@ lcd_init:			; optimize when out of pmem
         rcall delay_20ms        ;
 	rcall twi_start		;
 	rcall twi_sla_w		;
-				; 8-bit mode w/o busy flag check
+
         rcall bl_low            ; backlight bit
-	rcall d4_high		;
+
+	rcall d4_high		; four high order bits are transferred before the four low order
 	rcall d5_high		; 0011 - init1
 	rcall d6_low		;
 	rcall d7_low		;
-	rcall instr_w		;
+	rcall instr_w		; lcd instruction write mode
+	rcall twi_data_w	; send data register contents
+	rcall lcd_e_pulse	; 1
+
+        rcall delay_1ms         ;
+        rcall delay_1ms         ;
+        rcall delay_1ms         ;
+
 	rcall twi_data_w	;
-	rcall twi_e_pulse	; 1
-				;
-        rcall delay_1ms         ;
-        rcall delay_1ms         ;
-        rcall delay_1ms         ;
-	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 2
-				;
+        rcall lcd_e_pulse       ; 2
+
         rcall delay_100us       ;
+
 	rcall twi_data_w	;
-	rcall twi_e_pulse	; 3
-				;
+	rcall lcd_e_pulse	; 3
+
         rcall delay_100us       ;
+
         rcall d4_low            ; 0010 - pre function set
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 4
-				;
+        rcall lcd_e_pulse       ; 4
+
         rcall delay_100us       ; flag chech & 4-bit mode next
-				;
+
         rcall d5_high           ; 0010 - function set
 	rcall twi_data_w	;
-	rcall twi_e_pulse	; 5
+	rcall lcd_e_pulse	; 5
         rcall d7_high           ;
 	rcall d5_low		; 1000 - 2 lines, 5x8 font
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 6
-				;
-        rcall wait_bf           ;
+        rcall lcd_e_pulse       ; 6
+
+	; here we need to read bf-bit
+	; so be switched between writing instruction (rs=0, rw=0)
+	; and reading instruction (rs=0, rw=1)
+	; but there is only last section use a new bf routine
+	; for easy debugging
+	; go ahead to 'H' char semding section
+
+        rcall lcd_wait_bf       ; Busy Flag
 	rcall d7_low		; 0000 - display
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 7
+        rcall lcd_e_pulse       ; 7
 	rcall d7_high		; 1000 - off
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 8
-				;
-        rcall wait_bf           ;
+        rcall lcd_e_pulse       ; 8
+
+        rcall lcd_wait_bf       ;
 	rcall d7_low		; 0000 - display
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 9
+        rcall lcd_e_pulse       ; 9
         rcall d4_high           ; 0001 - clear
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 10
-				;
-        rcall wait_bf           ;
+        rcall lcd_e_pulse       ; 10
+
+        rcall lcd_wait_bf       ;
 	rcall d4_low		; 0000 - entry
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 11
+        rcall lcd_e_pulse       ; 11
         rcall d6_high           ;
         rcall d5_high           ; 0110 - mode
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 12
-				;
-        rcall wait_bf           ;
+        rcall lcd_e_pulse       ; 12
+
+        rcall lcd_wait_bf       ;
 	rcall d6_low		;
 	rcall d5_low		; 0000 - display
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 13
+        rcall lcd_e_pulse       ; 13
         rcall d7_high           ;
         rcall d6_high           ; 1100 - on
         rcall d5_high           ; 1110 - cursor
         rcall d4_high           ; 1111 - blink
-        rcall bl_high	        ;
+        rcall bl_high	        ; p3
 	rcall twi_data_w	;
-        rcall twi_e_pulse       ; 14
-				;
+        rcall lcd_e_pulse       ; 14
+
+        rcall lcd_wait_bf_real  ;
+	rcall data_w		; write data mode
+        rcall d7_low            ;
+        rcall d5_low            ; 0100 - 'H' high bits
+        rcall d4_low            ;
+        rcall twi_data_w        ;
+        rcall lcd_e_pulse       ; 13
+        rcall d7_high           ;
+        rcall d6_low            ; 1000 - 'H' low bits
+        rcall twi_data_w        ;
+        rcall lcd_e_pulse       ; 14
+
 	rcall twi_stop		;
         rcall delay_20ms        ; voila
 ret				;
 
-wait_bf:                ; wait until busy flag cleared
-       rcall delay_1ms ; debugging
-       ;rcall instr_r   ;
-       ;rcall e_high    ;
-       ;wb1:            ;
-	;rcall twi_data_r ; <------- not ready yet
-       ;sbic data, p7   ; till bf cleared
-       ;rjmp wb1        ;
-       ;rcall e_low     ;
-       ;nop             ;
-       ;rcall twi_e_pulse ; addr
-	;nop	       ;
-ret                    ;
+lcd_wait_bf:			; wait until busy flag cleared
+        rcall delay_1ms 	; debugging
+        rcall delay_1ms         ; debugging
+        rcall delay_1ms 	; debugging
+ret                     	;
 
-twi_e_pulse:                    ;
+lcd_wait_bf_real:                ; wait till flag resets
+
+	; только что завершилась передача двух тетрад первого символа
+	; требуется определить момент готовности lcd к приему следующего
+	; символа путем проверки бизи-флага
+
+	; с точки зрения lcd контроллера проверка флага:
+	; читается на rs низкий уровень и на rw - высокий
+	; читается положительный импульс на выводе E
+	; отображаю бизи-флаг на вывод D7 и адрес в D6:0
+
+	; с точки зрения pcf5874:
+	; мастер шлет p0=0,p1=1, изменяю регистр состояния
+	; мастер шлет p2=1, затем p2=0, ок - тоже дергаю бит в регистре туда-сюда
+	; изменилось состояние D7 со стороны lcd, но мастер пока не собирался его читать, курю
+	; мастер готовится к чтению p7 - шлет в него состояние 1
+	; смотрю, что там с D7 со стороны lcd и отображаю его в регистре
+	; мастер преходит в режим чтения, я ему подтверждаю
+	; засылаю ему байт регистра, и он присылает nack
+
+	rcall instr_r		; в 16 регистре бит 0 сбросить, бит 1 установить
+        rcall twi_data_w        ; отослать нвоое состояние на pcf
+	lwb:			;
+	rcall lcd_e_pulse	; защелкнуть
+	nop
+        rcall d7_high           ; подготовить бит 7 pcf к чтению
+        rcall twi_data_w        ;
+	nop
+        rcall twi_start         ; перейти в состояние мастер-приемник
+        rcall twi_sla_r         ;
+	rcall twi_data_r	; считать регистр данных twi в 16 регистр
+	nop
+        rcall twi_start         ; перейти в состояние мастер-передатчик
+        rcall twi_sla_w         ;
+	nop
+        rcall lcd_e_pulse       ; фейковый клок для чтения ненужного адреса
+        nop
+        sbrc data, p7		; проверить бизи-флаг в 16 регистре
+        rjmp lwb                ;
+
+        ;rcall delay_1ms         ; debugging проверил, дело не в пропуске флага
+        ;rcall delay_1ms         ; debugging
+        ;rcall delay_1ms         ; debugging
+
+ret
+
+
+
+lcd_e_pulse:                    ;
         rcall e_high            ;
 	rcall twi_data_w	;
-        nop                    ;
-        nop                    ;
-        nop                    ; about us (microsecond) (:
         nop                    ;
         rcall e_low             ;
 	rcall twi_data_w	;
 ret                             ;
 
-twi_backlight_on:		;
-	rcall bl_high		;
+lcd_backlight_on:		;
 	rcall twi_start		;
 	rcall twi_sla_w		;
+	rcall bl_high		;
 	rcall twi_data_w	;
 	rcall twi_stop		;
 ret				;
 
-twi_backlight_off:		;
-	rcall bl_low		;
-        rcall bl_high           ;
+lcd_backlight_off:		;
         rcall twi_start         ;
         rcall twi_sla_w         ;
+ 	rcall bl_low		;
         rcall twi_data_w        ;
         rcall twi_stop          ;
 ret				;
@@ -336,7 +395,7 @@ instr_w:                    ; instrustion write
         rcall rw_low        ;
 ret                         ;
 
-instr_r:                    ; busy flag or a-counter read
+instr_r:                    ; busy flag or address
         rcall rs_low        ;
         rcall rw_high       ;
 ret                         ;
@@ -415,6 +474,145 @@ bl_low:		        ;
         cbr data, 1<<bl ;
 ret                     ;
 
+; ----------------- T W I --------------
+
+twi_scan:			;
+	ldi address, 127	; goes down
+	twscan1:		;
+	rcall twi_start		; start/rep_start
+	rcall twi_sla_w		; slave addres + w
+	cpi temp, 0xFF		; touched?
+	brne twscan2		; if not cleared
+	clr temp		; (temp=0x00)
+	subi address, 1		; else next address
+	cpi address, 0		; last address
+	breq twscan2		; exit with zero address
+	rjmp twscan1		;
+	twscan2:		;
+	rcall twi_stop		;
+ret				;
+
+twi_data_r:                                     ;
+        ldi temp, ((1<<TWINT)|(1<<TWEN))        ; reset flag +nack
+        out TWCR, temp                          ;
+        tdr1:                                   ;
+        in temp, TWCR                           ; check if
+        sbrs temp, TWINT                        ; flag set?
+        rjmp tdr1                               ; not yet, repeat
+	in data, TWDR				; data<-
+ret                                             ;
+
+twi_data_w:					;
+        tdw1:                                   ;
+        in temp, TWCR                           ;
+        sbrs temp, TWINT                        ; ready?
+        rjmp tdw1                               ; not yet, repeat
+	out TWDR, data				; data->
+	ldi temp, ((1<<TWINT)|(1<<TWEN))	;
+	out TWCR, temp				; go
+	tdw2:					;
+	in temp, TWCR				;
+	sbrs temp, TWINT			; sent?
+	rjmp tdw2				; not yet, repeat
+	in temp, TWSR				; check status
+	andi temp, 0xF8				;
+	cpi temp, DATAW_ACK			; 0x28
+	breq tdw3				; ok
+        rcall error	                        ; led
+	tdw3:					;
+ret						;
+
+twi_sla_r:                                      ;
+        mov temp, address                       ; slave address (e.g. 0x3F as pcf of mine)
+        lsl temp                                ; <<address + 0, R/W = W
+	ori temp, 0x01				; +1, R/W = R
+        out TWDR, temp                          ;
+        ldi temp, ((1<<TWINT)|(1<<TWEN))        ;
+        out TWCR, temp                          ; go
+        slar1:                                  ;
+        in temp, TWCR                           ;
+        sbrs temp, TWINT                        ; sent
+        rjmp slar1                              ;
+        in temp, TWSR                           ; read status
+        andi temp, 0xF8                         ;
+        cpi temp, SLAR_ACK                      ; 0x40
+        breq slar2                              ; acked
+        rcall error                             ;
+        slar2:                                  ;
+ret                                             ;
+
+twi_sla_w:					;
+	mov temp, address			; slave address (e.g. 0x3F as pcf of mine)
+	lsl temp				; <<address + 0, R/W = W
+	out TWDR, temp				;
+	ldi temp, ((1<<TWINT)|(1<<TWEN))	;
+	out TWCR, temp				; go
+	slaw1:					;
+        in temp, TWCR                           ;
+        sbrs temp, TWINT                        ; sent
+        rjmp slaw1                              ;
+        in temp, TWSR                           ; read status
+        andi temp, 0xF8                         ;
+        cpi temp, SLAW_ACK                      ; 0x18
+	breq slaw2				; acked (stay temp untouched if scanned)
+	;rcall error				; uncomment if used w/o autodetect
+	ser temp				; else (temp=0xFF)
+	slaw2:					;
+ret						;
+
+twi_start:						;
+	ldi temp, ((1<<TWINT)|(1<<TWSTA)|(1<<TWEN))	;
+	out TWCR, temp					; go
+	start1:						;
+	in temp, TWCR					;
+	sbrs temp, TWINT				; sent
+        rjmp start1                                     ;
+	in temp, TWSR					; read status
+	andi temp, 0xF8					;
+	cpi temp, START					; start acked? 0x08
+	breq start2					;
+        cpi temp, REP_START                             ; 0x10
+        breq start2                                     ; maybe rep. acked?
+	rcall error					; error led
+	start2:						;
+ret							; acked
+
+twi_stop:						;
+	ldi temp, ((1<<TWINT)|(1<<TWEN)|(1<<TWSTO))	;
+        out TWCR, temp                                  ;
+ret							;
+
+twi_init:			; 100 kHz @4MHz clock
+	ldi temp, 0b00001100	; 4000000 / ( 16 + 2*TWBR * 4^TWPS )
+	out TWBR, temp		; 0x0c
+        in temp, TWSR	        ;
+	ori temp, 0b00000000	; 1
+	out TWSR, temp		;
+ret				;
+
+; -------------- T I M E R 0 -------------
+
+delay_1s:			;
+	rcall delay_100ms     	;
+        rcall delay_100ms       ;
+        rcall delay_100ms       ;
+        rcall delay_100ms       ;
+        rcall delay_100ms       ;
+        rcall delay_100ms       ;
+        rcall delay_100ms       ;
+        rcall delay_100ms       ;
+        rcall delay_100ms       ;
+        rcall delay_100ms       ;
+ret				;
+
+delay_100ms:			;
+        rcall delay_20ms	;
+        rcall delay_20ms        ;
+        rcall delay_20ms        ;
+        rcall delay_20ms        ;
+	rcall delay_20ms 	;
+ret				;
+
 delay_20ms:                     ;
         ldi temp, 20            ;
 	d20:			;
@@ -423,19 +621,19 @@ delay_20ms:                     ;
 	brne d20		;
 ret 		                ;
 
+delay_1ms:                      ;
+        ldi tcntr, 40           ;
+        d1:                     ;
+        cpi tcntr, 0            ;
+        brne d1                 ;
+ret                             ;
+
 delay_100us:                    ;
         ldi tcntr, 4            ;
         du1:                    ;
         cpi tcntr, 0            ;
         brne du1                ;
 ret		                ;
-
-delay_1ms:                      ;
-        ldi tcntr, 40           ;
-        d1:                     ;
-	cpi tcntr, 0		;
-        brne d1                 ;
-ret 		                ;
 
 timer_init:                             ;
         ldi temp, (1<<CS00)             ; prescaler 1, 0.25 us
@@ -461,104 +659,16 @@ TIMER0_OVF_vect:                ;
 	sei			;
 reti 		                ;
 
-led_init:			;
+; ----------------- D E B U G -----------
+
+error:				; debug led
         sbi DDRD, PD7           ; D7 output
         cbi PORTD, PD7          ; D7 low
-ret				;
-
-led_on:				;
-	rcall led_init		;
         sbi PORTD, PD7          ; D7 high
 ret				;
 
-pcf_init:			;
-	nop			;
-ret				;
+brake:	rjmp brake		; debug loop
 
-twi_scan:			;
-	ldi address, 127	; will step backward
-	twscan1:		;
-	rcall twi_start		; start/rep_start
-	rcall twi_sla_w		; slave addres + w
-	cpi temp, 0xFF		; touched?
-	brne twscan2		; if not cleared
-	clr temp		; (temp=0x00)
-	subi address, 1		; else next address
-	cpi address, 0		; last address
-	breq twscan2		; exit with zero address
-	rjmp twscan1		;
-	twscan2:		;
-	rcall twi_stop		;
-	ret			;
-
-twi_data_w:					;
-	mov temp, data				;
-	out TWDR, temp				; data
-	ldi temp, ((1<<TWINT)|(1<<TWEN))	;
-	out TWCR, temp				; go
-	tdw1:					;
-	in temp, TWCR				;
-	sbrs temp, TWINT			; sent?
-	rjmp tdw1				; no? repeat
-	in temp, TWSR				; else, read status
-	andi temp, 0xF8				;
-	cpi temp, DATA_ACK			; ack?
-	breq tdw2				; ok
-        rcall led_on                       	; nack
-	tdw2:					;
-ret					;
-
-twi_sla_w:					;
-	mov temp, address			; slave address (e.g. 0x3F as pcf of mine)
-	lsl temp				; address<<  + 0, R/W = W
-	out TWDR, temp				;
-	ldi temp, ((1<<TWINT)|(1<<TWEN))	;
-	out TWCR, temp				; go
-	slaw1:					;
-        in temp, TWCR                           ;
-        sbrs temp, TWINT                        ; sent
-        rjmp slaw1                              ;
-        in temp, TWSR                           ; read status
-        andi temp, 0xF8                         ;
-        cpi temp, SLAW_ACK                      ;
-	breq slaw2				; acked (stay temp untouched)
-	;rcall led_on				; uncomment if used w/o autodetect
-	ser temp				; else (temp=0xFF)
-	slaw2:					;
-ret						;
-
-twi_start:						;
-	ldi temp, ((1<<TWINT)|(1<<TWSTA)|(1<<TWEN))	;
-	out TWCR, temp					; go
-	start1:						;
-	in temp, TWCR					;
-	sbrs temp, TWINT				; sent
-        rjmp start1                                     ;
-	in temp, TWSR					; read status
-	andi temp, 0xF8					;
-	cpi temp, START					;
-	breq start2					;
-        cpi temp, REP_START                             ;
-        breq start2                                     ;
-	rcall led_on					; error
-	start2:						;
-ret							; acked
-
-twi_stop:						;
-	ldi temp, ((1<<TWINT)|(1<<TWEN)|(1<<TWSTO))	;
-        out TWCR, temp                                  ;
-ret							;
-
-twi_init:			; 100 kHz clock @4MHz
-	ldi temp, 0b00001100	; 4000000 / ( 16 + 2*twbr * 4^twps )
-	out TWBR, temp		; 12
-        in temp, TWSR	        ; read whole TWSR
-	andi temp, 0b11111100	; set prescaler TWPS 1:0 as 00
-	out TWSR, temp		;
-ret				;
-
-.global __vector_default        ; Note [10] nongnu.org assembly
-__vector_default:		;
-reti				;
+__vector_default:	reti	;
 
 .end
