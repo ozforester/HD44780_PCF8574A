@@ -11,6 +11,9 @@
 ; swap busy-flag and delay solves problem
 ; so there is a bug in wrong ready/busy recognition
 
+; to get working model you may change the last byte sending busy-flag check
+; or just coment that block out
+
 ; нужно добавить регистр флаг для понимания новое соединение начинать или в старое вписываться..
 
 #undef __SFR_OFFSET
