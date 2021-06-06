@@ -6,14 +6,6 @@
 ; JHD162A HD44780
 ; via twi extension PCF8574AT
 
-; not working good lcd found
-; there is a bug
-; swap busy-flag and delay solves problem
-; so there is a bug in wrong ready/busy recognition
-
-; to get working model you may change the last byte sending busy-flag check
-; or just coment that block out
-
 ; Well I couldn't use an lcd busy-flag via twi. Maybe that's  timing issue.. I surrender (:
 
 #undef __SFR_OFFSET
