@@ -14,7 +14,7 @@
 ; to get working model you may change the last byte sending busy-flag check
 ; or just coment that block out
 
-; нужно добавить регистр флаг для понимания новое соединение начинать или в старое вписываться..
+; Well I couldn't use an lcd busy-flag via twi. Maybe that's  timing issue.. I surrender (:
 
 #undef __SFR_OFFSET
 #define __SFR_OFFSET 0
@@ -57,7 +57,7 @@ len = 23			; string length
 
 msg1: .asciz "Hi, stranger,"    ;
 msg2: .asciz "me ozforester"    ; eeprom space :0E000000 6D65206F7A666F72657374657200 AD
-				; ihex         S140000DD m e _ o z f o r e s t e r \0 CS
+				; ihex         S140000DD m e _ o z f o r e s t e r x0 CS
 
 .section .text
 
@@ -150,7 +150,7 @@ lcd_msg:     			;
         sbi EECR, EERE		; set read enable
 	nop			;
         in char, EEDR           ; read eeprom
-	cpi char, 0		; till \0
+	cpi char, 0		; till 0
 	breq lm2		;
 	rcall lcd_char		;
 	inc len 		; inc address
@@ -170,7 +170,7 @@ ret                             ;
 ;	lpm			; read msg byte into r0
 ;	mov char, accum		; copy r0 into char
 ;	cpi char, 0		; end of string? (seems it always non zero)
-;	breq sl2		; '\0' string terminator
+;	breq sl2		; '0' string terminator
 ;	inc len			; increment length counter
 ;	inc zl			; increment Z
 ;	rjmp sl1		; and continue read flash
