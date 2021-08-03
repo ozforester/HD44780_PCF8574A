@@ -24,7 +24,7 @@
 #define DATAR_ACK  0x50
 #define DATAR_NACK 0x58
 
-; pcf(twi)q data bits
+; pcf(twi) data bits
 #define rs 0
 #define rw 1
 #define  e 2
@@ -47,11 +47,12 @@ len = 23			; string length
 
 .section .eeprom
 
-msg1: .asciz "Hi, stranger,"    ;
-msg2: .asciz "me ozforester"    ; eeprom space :0E000000 6D65206F7A666F72657374657200 AD
-				; ihex         S140000DD m e _ o z f o r e s t e r x0 CS
+msg1: .asciz "Hi, stranger," 	; eeprom space :0E000000 6D65206F7A666F72657374657200 AD
+				; ihex         S140000DD m e   o z f o r e s t e r  0 CS
 
 .section .text
+
+msg2: .asciz "me ozforester"	;
 
 .global main			;
 .global TIMER0_OVF_vect		;
@@ -71,7 +72,9 @@ main:				;
         main1:                  ;
         rcall delay_20ms        ;
         rcall lcd_init          ;
-        ;rcall lcd_print         ;
+	rcall error
+        rcall lcd_print_eeprom  ;
+        rcall lcd_print_flash   ;
 	;rcall error		; special j-tag led (:
 	loop:			;
 	rjmp loop 		;
@@ -120,13 +123,24 @@ lcd_clear:                      ;
 	rcall twi_stop		;
 ret                             ;
 
+lcd_print_flash:		;
+        rcall twi_start         ;
+        rcall twi_sla_w         ;
+        ldi ZL, lo8(msg2)    ;
+	ldi ZH, hi8(msg2)	;
+        lpm char, Z	        ;
+	ldi len, 1		;
+        rcall lcd_char           ;
+	adiw Z, 1
+        lpm char, Z             ;
+        rcall lcd_char           ;
+	rcall twi_stop
+ret                             ;
 
-lcd_print:			;
+lcd_print_eeprom:		;
         ldi char, msg1          ;
 	rcall lcd_msg		;
 	rcall lcd_cur		;
-	ldi char, msg2		;
-        rcall lcd_msg           ;
 ret				;
 
 lcd_msg:     			;
@@ -245,7 +259,6 @@ lcd_init:			; optimize when out of pmem
 	rcall d5_low		; 1000 - 2 lines, 5x8 font
 	rcall twi_data_w	;
         rcall lcd_e_pulse       ; 6
-
 	; here we need to read bf-bit
 	; so be switched between writing instruction (rs=0, rw=0)
 	; and reading instruction (rs=0, rw=1)
@@ -268,7 +281,6 @@ lcd_init:			; optimize when out of pmem
         rcall d4_high           ; 0001 - clear
 	rcall twi_data_w	;
         rcall lcd_e_pulse       ; 10
-
         rcall lcd_wait_bf       ;
 	rcall d4_low		; 0000 - entry
 	rcall twi_data_w	;
@@ -290,19 +302,17 @@ lcd_init:			; optimize when out of pmem
         rcall bl_high	        ; p3
 	rcall twi_data_w	;
         rcall lcd_e_pulse       ; 14
-
-        rcall lcd_wait_bf_real  ;
-	rcall data_w		; write data mode
-        rcall d7_low            ;
-        rcall d5_low            ; 0100 - 'H' high bits
-        rcall d4_low            ;
-        rcall twi_data_w        ;
-        rcall lcd_e_pulse       ; 13
-        rcall d7_high           ;
-        rcall d6_low            ; 1000 - 'H' low bits
-        rcall twi_data_w        ;
-        rcall lcd_e_pulse       ; 14
-
+        ;rcall lcd_wait_bf_real  ;
+	;rcall data_w		; write data mode
+        ;rcall d7_low            ;
+        ;rcall d5_low            ; 0100 - 'H' high bits
+        ;rcall d4_low            ;
+        ;rcall twi_data_w        ;
+        ;rcall lcd_e_pulse       ; 13
+        ;rcall d7_high           ;
+        ;rcall d6_low            ; 1000 - 'H' low bits
+        ;rcall twi_data_w        ;
+        ;rcall lcd_e_pulse       ; 14
 	rcall twi_stop		;
         rcall delay_20ms        ; voila
 ret				;
